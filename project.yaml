@@ -14,9 +14,9 @@ spec:
   repository:
     provider: github
     visibility: private
-    url: github.com/example/order-operations-portal
+    url: github.com/williamlabdev/order-operations-portal
     defaultBranch: main
-    status: fixture-pending-remote
+    status: active
   service:
     id: order-operations-web
     runtime: go

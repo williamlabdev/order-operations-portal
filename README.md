@@ -29,7 +29,9 @@ Open <http://localhost:8080>. All order data is synthetic. The API has no login,
 
 ## Repository status
 
-The manifest models the eventual source as one GitHub private repository. The URL is a fixture placeholder until a real private remote is created; `fixture-pending-remote` is deliberate and is not GitHub evidence.
+This repository is the real source of the governed Project: `github.com/williamlabdev/order-operations-portal` (private during development). It was split out of the ContextRail workspace with its history; the copy under `demo/order-operations-portal` in the ContextRail repository stays a read-only fixture for ContextRail's own tests.
+
+Pull requests run `test` and `build` on GitHub Actions (`.github/workflows/ci.yml`). ContextRail reads those check runs, the diff and the reviews back through the GitHub API when a candidate is submitted with `read_back: github`, so a candidate's evidence is what GitHub observed, not what the operator declared.
 
 ## Evidence
 
