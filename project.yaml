@@ -13,7 +13,7 @@ spec:
     business: demo/operations
   repository:
     provider: github
-    visibility: private
+    visibility: public
     url: github.com/williamlabdev/order-operations-portal
     defaultBranch: main
     status: active
