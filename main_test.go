@@ -27,6 +27,125 @@ func TestHealthAndOrderList(t *testing.T) {
 	}
 }
 
+// --- AWO-001: filter the order list by status --------------------------------
+
+// listOrders issues GET /api/orders with the given raw query (may be empty)
+// and returns the response.
+func listOrders(t *testing.T, s *server, rawQuery string) *httptest.ResponseRecorder {
+	t.Helper()
+	target := "/api/orders"
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	res := httptest.NewRecorder()
+	s.routes().ServeHTTP(res, req)
+	return res
+}
+
+// decodeOrders decodes a 200 order list into id → status.
+func decodeOrders(t *testing.T, res *httptest.ResponseRecorder) map[string]string {
+	t.Helper()
+	if res.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200: %s", res.Code, res.Body.String())
+	}
+	var orders []struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&orders); err != nil {
+		t.Fatalf("decode orders: %v", err)
+	}
+	statuses := make(map[string]string, len(orders))
+	for _, item := range orders {
+		statuses[item.ID] = item.Status
+	}
+	return statuses
+}
+
+// reviewOrder moves an order out of PENDING_REVIEW so the list has mixed
+// statuses to filter on.
+func reviewOrder(t *testing.T, s *server, orderID, decision string) {
+	t.Helper()
+	body, _ := json.Marshal(reviewRequest{Decision: decision, Note: "reviewed for the filter test"})
+	req := httptest.NewRequest(http.MethodPost, "/api/orders/"+orderID+"/review", bytes.NewReader(body))
+	res := httptest.NewRecorder()
+	s.routes().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("review %s as %s: got %d, want 200", orderID, decision, res.Code)
+	}
+}
+
+// GET /api/orders?status=<status> returns only the orders in that status,
+// for each of the three statuses.
+func TestListOrdersFiltersByStatus(t *testing.T) {
+	s := newServer()
+	reviewOrder(t, s, "ORD-1001", "APPROVED")
+	// ORD-1002 stays PENDING_REVIEW.
+
+	cases := map[string]map[string]string{
+		"PENDING_REVIEW": {"ORD-1002": "PENDING_REVIEW"},
+		"APPROVED":       {"ORD-1001": "APPROVED"},
+		"REJECTED":       {},
+	}
+	for status, want := range cases {
+		got := decodeOrders(t, listOrders(t, s, "status="+status))
+		if len(got) != len(want) {
+			t.Fatalf("status=%s: got %v, want %v", status, got, want)
+		}
+		for id, wantStatus := range want {
+			if got[id] != wantStatus {
+				t.Fatalf("status=%s: got %v, want %v", status, got, want)
+			}
+		}
+	}
+
+	// A review that changes the status moves the order between filters.
+	reviewOrder(t, s, "ORD-1002", "REJECTED")
+	if got := decodeOrders(t, listOrders(t, s, "status=PENDING_REVIEW")); len(got) != 0 {
+		t.Fatalf("queue must be empty after every order is reviewed: %v", got)
+	}
+	if got := decodeOrders(t, listOrders(t, s, "status=REJECTED")); len(got) != 1 || got["ORD-1002"] != "REJECTED" {
+		t.Fatalf("rejected filter must list the rejected order: %v", got)
+	}
+}
+
+// GET /api/orders without a status parameter still returns every order,
+// whatever their statuses; a different, unrelated query parameter does not
+// filter either.
+func TestListOrdersWithoutStatusReturnsAll(t *testing.T) {
+	s := newServer()
+	reviewOrder(t, s, "ORD-1001", "REJECTED")
+	for _, rawQuery := range []string{"", "customer=Acme"} {
+		got := decodeOrders(t, listOrders(t, s, rawQuery))
+		if len(got) != 2 || got["ORD-1001"] != "REJECTED" || got["ORD-1002"] != "PENDING_REVIEW" {
+			t.Fatalf("query %q: got %v, want both orders", rawQuery, got)
+		}
+	}
+}
+
+// A status that is not PENDING_REVIEW, APPROVED or REJECTED is a 400 with a
+// JSON error body, never an empty list.
+func TestListOrdersRejectsUnknownStatus(t *testing.T) {
+	s := newServer()
+	for _, rawQuery := range []string{
+		"status=SHIPPED",
+		"status=approved",
+		"status=PENDING_REVIEW%20",
+		"status=",
+		"status",
+		"status=PENDING_REVIEW&status=APPROVED",
+	} {
+		res := listOrders(t, s, rawQuery)
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("query %q: got %d, want 400: %s", rawQuery, res.Code, res.Body.String())
+		}
+		if msg := decodeError(t, res); !strings.Contains(msg, "status") {
+			t.Fatalf("query %q: error must name the status parameter: %q", rawQuery, msg)
+		}
+	}
+}
+
 func TestReviewRequiresNote(t *testing.T) {
 	for _, note := range []string{"", " \t\n ", "　"} {
 		s := newServer()

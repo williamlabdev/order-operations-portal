@@ -200,14 +200,48 @@ func listenAddr(port string) string {
 	return ":8080"
 }
 
+// orderStatuses are the only values an order can carry, so they are the only
+// values the status filter on GET /api/orders accepts.
+var orderStatuses = map[string]bool{"PENDING_REVIEW": true, "APPROVED": true, "REJECTED": true}
+
+// listOrders returns every order, or only the orders in one status when the
+// request carries ?status=<status> (AWO-001). A status that is not one of
+// orderStatuses is a 400 with a JSON error rather than an empty list, so a
+// typo in the queue filter cannot look like an empty queue.
 func (s *server) listOrders(w http.ResponseWriter, r *http.Request) {
+	status, filtered, err := statusFilter(r.URL.Query())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]orderView, 0, len(s.orders))
 	for _, item := range s.orders {
+		if filtered && item.Status != status {
+			continue
+		}
 		result = append(result, orderView{order: *item, Evidence: s.evidenceOf(item.ID)})
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// statusFilter reads the optional status query parameter. It reports whether
+// a filter was requested and, if so, which status; an absent parameter means
+// no filter, and a present parameter must be given once and be exactly one
+// of orderStatuses (no trimming or case folding, matching the stored value).
+func statusFilter(query url.Values) (status string, filtered bool, err error) {
+	values, present := query["status"]
+	if !present {
+		return "", false, nil
+	}
+	if len(values) != 1 {
+		return "", false, fmt.Errorf("status must be given once")
+	}
+	if !orderStatuses[values[0]] {
+		return "", false, fmt.Errorf("status must be PENDING_REVIEW, APPROVED or REJECTED")
+	}
+	return values[0], true, nil
 }
 
 // evidenceOf returns a copy of the order's references, never nil, so the JSON
